@@ -27,13 +27,13 @@ A simple expense tracker built with Next.js, MongoDB, shadcn/ui, and Recharts.
 ## 📸 Screenshots
 
 ### 📊 Monthly Bar Chart
-![Monthly Chart](public/screenshots/monthchart.png)
+![Monthly Chart](public/screenshot/monthchart.png)
 
 ### 🥧 Category Pie Chart
-![Category Chart](public/screenshots/categorychart.png)
+![Category Chart](public/screenshot/categorychart.png)
 
 ### 💰 Budget Form & List
-![Budget](public/screenshots/budget.png)
+![Budget](public/screenshot/budget.png)
 
 ### 💵 Transactions
-![Transaction](public/screenshots/transaction.png)
+![Transaction](public/screenshot/transaction.png)
