@@ -10,165 +10,147 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { parseISO, isSameMonth, format } from "date-fns";
+import { SummaryCards } from "@/components/forms/summaryCards";
 
-type Transaction = {
-  amount: number;
-  date: string;
-  category?: string;
-};
+/* ---------- types ---------- */
+type Transaction = { amount: number; date: string; category?: string };
+type Budget = { month: string; category: string; budget: number };
+type Slice = { name: string; value: number; budget: number; overspent: boolean };
 
-type Budget = {
-  month: string;     // "YYYY-MM"
-  category: string;
-  budget: number;
-};
+/* ---------- colors ---------- */
+const COLOR_OK = "#10b981";
+const COLOR_OVER = "#ef4444";
+const COLOR_NONE = "#3b82f6";
 
-type Slice = {
-  name: string;
-  value: number;     // spent
-  budget: number;    // allocated
-  overspent: boolean;
-};
-
-/* ───────── colors ───────── */
-const COLOR_OK = "#10b981";   // green‑500
-const COLOR_OVER = "#ef4444"; // red‑500
-const COLOR_NONE = "#3b82f6"; // blue‑500 (no budget)
-
-export function CategoryPieChart() {
-  const [data, setData] = useState<Slice[]>([]);
-  const [empty, setEmpty] = useState(false);
+/* ---------- simple hook to detect width ---------- */
+function useScreen() {
+  const [width, setWidth] = useState<number | null>(null);
 
   useEffect(() => {
-    const fetchData = async () => {
+    const handleResize = () => setWidth(window.innerWidth);
+    handleResize(); // set initial width on mount
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  return width;
+}
+
+export function CategoryPieChart() {
+  const width = useScreen();
+const isMobile = width !== null && width < 640;         // Tailwind sm breakpoint
+  const radius = isMobile ? 75 : 110;
+
+  const [data, setData] = useState<Slice[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [empty, setEmpty] = useState(false);
+
+  /* ---------- fetch + aggregate ---------- */
+  useEffect(() => {
+    (async () => {
       try {
         const monthKey = format(new Date(), "yyyy-MM");
-
         const [txRes, budRes] = await Promise.all([
           fetch("/api/transactions"),
           fetch(`/api/budget?month=${monthKey}`),
         ]);
 
-        const txJson: unknown = await txRes.json();
-        const budJson: unknown = await budRes.json();
+        const txs = (await txRes.json()) as Transaction[];
+        const budgets = (await budRes.json()) as Budget[];
+        setTransactions(txs);
 
-        if (!Array.isArray(txJson) || !Array.isArray(budJson)) {
-          console.error("Expected arrays from APIs", { txJson, budJson });
-          setEmpty(true);
-          return;
-        }
-
-        const txs = txJson as Transaction[];
-        const budgets = budJson as Budget[];
-
-        /* ---- aggregate spent ---- */
-        const spentMap = new Map<string, number>();
-
-        txs.forEach((tx) => {
-          if (!tx.category) return;
-          if (!isSameMonth(parseISO(tx.date), new Date())) return;
-          spentMap.set(tx.category, (spentMap.get(tx.category) || 0) + tx.amount);
+        const spent = new Map<string, number>();
+        txs.forEach((t) => {
+          if (!t.category) return;
+          if (!isSameMonth(parseISO(t.date), new Date())) return;
+          spent.set(t.category, (spent.get(t.category) || 0) + t.amount);
         });
 
-        /* ---- map budgets ---- */
-        const budMap = new Map<string, number>();
-        budgets.forEach((b) => {
-          budMap.set(b.category, b.budget);
-        });
-
-        /* ---- build slices ---- */
+        const budMap = new Map(budgets.map((b) => [b.category, b.budget]));
         const slices: Slice[] = [];
-        spentMap.forEach((spent, cat) => {
-          const budget = budMap.get(cat) ?? 0;
+        spent.forEach((val, cat) =>
           slices.push({
             name: cat,
-            value: spent,
-            budget,
-            overspent: budget > 0 && spent > budget,
-          });
-        });
+            value: val,
+            budget: budMap.get(cat) ?? 0,
+            overspent: (budMap.get(cat) ?? 0) > 0 && val > (budMap.get(cat) ?? 0),
+          })
+        );
 
         setEmpty(slices.length === 0);
         setData(slices);
-      } catch (err) {
-        console.error("Pie chart fetch error:", err);
+      } catch (e) {
+        console.error(e);
         setEmpty(true);
       }
-    };
-
-    fetchData();
+    })();
   }, []);
 
   if (empty) {
     return (
-      <div className="w-full h-[260px] mt-8 flex items-center justify-center border rounded-lg bg-white">
-        <p className="text-muted-foreground">
-          No data for this month yet.
-        </p>
+      <div className="w-full h-64 mt-8 flex items-center justify-center border rounded-lg bg-white">
+        <p className="text-muted-foreground">No data for this month yet.</p>
       </div>
     );
   }
 
-  /* ---- pick color per slice ---- */
-  const getFill = (slice: Slice) =>
-    slice.budget === 0
-      ? COLOR_NONE          // no budget set
-      : slice.overspent
-      ? COLOR_OVER          // spent > budget
-      : COLOR_OK;           // within budget
+  const getFill = (s: Slice) =>
+    s.budget === 0 ? COLOR_NONE : s.overspent ? COLOR_OVER : COLOR_OK;
 
-  /* ---- custom tooltip ---- */
   const CustomTooltip = ({
     active,
     payload,
   }: {
     active?: boolean;
     payload?: any[];
-  }) => {
-    if (active && payload && payload.length) {
-      const { name, value, payload: row } = payload[0];
-      const diff = row.budget - value;
-      return (
-        <div className="rounded-lg border bg-white p-2 text-sm shadow">
-          <p className="font-medium">{name}</p>
-          <p>Spent: ₹ {value.toLocaleString()}</p>
-          <p>Budget: ₹ {row.budget?.toLocaleString() || "—"}</p>
-          {row.budget > 0 && (
-            <p className={diff < 0 ? "text-red-600" : "text-green-600"}>
-              {diff < 0
-                ? `Over by ₹${Math.abs(diff).toLocaleString()}`
-                : `Under by ₹${diff.toLocaleString()}`}
-            </p>
-          )}
-        </div>
-      );
-    }
-    return null;
-  };
+  }) =>
+    active && payload?.length ? (
+      <div className="rounded-lg border bg-white p-2 text-sm shadow">
+        <p className="font-medium">{payload[0].name}</p>
+        <p>Spent: ₹{payload[0].value.toLocaleString()}</p>
+        <p>Budget: ₹{payload[0].payload.budget?.toLocaleString() || "—"}</p>
+      </div>
+    ) : null;
 
   return (
-    <div className="w-full h-[320px] mt-8 bg-white p-4 rounded-lg border shadow-sm">
-      <h2 className="text-lg font-semibold mb-4">
-        Category Breakdown vs Budget (this month)
-      </h2>
+    <>
+      {/* KPI cards */}
+      <SummaryCards
+        transactions={transactions.map((t) => ({ ...t, category: t.category ?? "" }))}
+      />
 
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey="value"
-            nameKey="name"
-            label={({ name }) => name}
-            outerRadius={110}
-          >
-            {data.map((slice, idx) => (
-              <Cell key={idx} fill={getFill(slice)} />
-            ))}
-          </Pie>
-          <Tooltip content={<CustomTooltip />} />
-          <Legend layout="horizontal" verticalAlign="bottom" />
-        </PieChart>
-      </ResponsiveContainer>
-    </div>
+      {/* Pie chart */}
+      <div className="w-full h-[320px] mt-8 bg-white p-4 rounded-lg border shadow-sm">
+        <h2 className="text-lg font-semibold mb-4">
+          Category Breakdown vs Budget (this month)
+        </h2>
+
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="value"
+              nameKey="name"
+              outerRadius={radius}
+              /* Hide slice labels on phones */
+              label={isMobile ? false : ({ name }) => name}
+            >
+              {data.map((s, i) => (
+                <Cell key={i} fill={getFill(s)} />
+              ))}
+            </Pie>
+            <Tooltip content={<CustomTooltip />} />
+            <Legend
+              layout={isMobile ? "vertical" : "horizontal"}
+              verticalAlign={isMobile ? "bottom" : "bottom"}
+              align={isMobile ? "center" : "center"}
+              iconSize={10}
+              wrapperStyle={isMobile ? { marginTop: 8 } : undefined}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    </>
   );
 }
