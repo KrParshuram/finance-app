@@ -9,8 +9,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { parseISO, isSameMonth } from "date-fns";
-import { CATEGORIES } from "@/constant/categories";
+import { parseISO, isSameMonth, format } from "date-fns";
 
 type Transaction = {
   amount: number;
@@ -18,22 +17,23 @@ type Transaction = {
   category?: string;
 };
 
-type Slice = {
-  name: string;
-  value: number;
+type Budget = {
+  month: string;     // "YYYY-MM"
+  category: string;
+  budget: number;
 };
 
-// a handful of pleasant tailwind colors; tweak if you like
-const COLORS = [
-  "#3b82f6", // blue‑500
-  "#10b981", // emerald‑500
-  "#f97316", // orange‑500
-  "#6366f1", // indigo‑500
-  "#ec4899", // pink‑500
-  "#f59e0b", // amber‑500
-  "#14b8a6", // teal‑500
-  "#a855f7", // violet‑500
-];
+type Slice = {
+  name: string;
+  value: number;     // spent
+  budget: number;    // allocated
+  overspent: boolean;
+};
+
+/* ───────── colors ───────── */
+const COLOR_OK = "#10b981";   // green‑500
+const COLOR_OVER = "#ef4444"; // red‑500
+const COLOR_NONE = "#3b82f6"; // blue‑500 (no budget)
 
 export function CategoryPieChart() {
   const [data, setData] = useState<Slice[]>([]);
@@ -41,24 +41,59 @@ export function CategoryPieChart() {
 
   useEffect(() => {
     const fetchData = async () => {
-      const res = await fetch("/api/transactions");
-      const txs: Transaction[] = await res.json();
+      try {
+        const monthKey = format(new Date(), "yyyy-MM");
 
-      const now = new Date();
-      const totals = new Map<string, number>();
+        const [txRes, budRes] = await Promise.all([
+          fetch("/api/transactions"),
+          fetch(`/api/budget?month=${monthKey}`),
+        ]);
 
-      txs.forEach((tx) => {
-        if (!tx.category) return; // skip uncategorised
-        if (!isSameMonth(parseISO(tx.date), now)) return; // only this month
-        totals.set(tx.category, (totals.get(tx.category) || 0) + tx.amount);
-      });
+        const txJson: unknown = await txRes.json();
+        const budJson: unknown = await budRes.json();
 
-      const slices: Slice[] = Array.from(totals.entries()).map(
-        ([name, value]) => ({ name, value })
-      );
+        if (!Array.isArray(txJson) || !Array.isArray(budJson)) {
+          console.error("Expected arrays from APIs", { txJson, budJson });
+          setEmpty(true);
+          return;
+        }
 
-      setEmpty(slices.length === 0);
-      setData(slices);
+        const txs = txJson as Transaction[];
+        const budgets = budJson as Budget[];
+
+        /* ---- aggregate spent ---- */
+        const spentMap = new Map<string, number>();
+
+        txs.forEach((tx) => {
+          if (!tx.category) return;
+          if (!isSameMonth(parseISO(tx.date), new Date())) return;
+          spentMap.set(tx.category, (spentMap.get(tx.category) || 0) + tx.amount);
+        });
+
+        /* ---- map budgets ---- */
+        const budMap = new Map<string, number>();
+        budgets.forEach((b) => {
+          budMap.set(b.category, b.budget);
+        });
+
+        /* ---- build slices ---- */
+        const slices: Slice[] = [];
+        spentMap.forEach((spent, cat) => {
+          const budget = budMap.get(cat) ?? 0;
+          slices.push({
+            name: cat,
+            value: spent,
+            budget,
+            overspent: budget > 0 && spent > budget,
+          });
+        });
+
+        setEmpty(slices.length === 0);
+        setData(slices);
+      } catch (err) {
+        console.error("Pie chart fetch error:", err);
+        setEmpty(true);
+      }
     };
 
     fetchData();
@@ -68,16 +103,53 @@ export function CategoryPieChart() {
     return (
       <div className="w-full h-[260px] mt-8 flex items-center justify-center border rounded-lg bg-white">
         <p className="text-muted-foreground">
-          No transactions for this month yet.
+          No data for this month yet.
         </p>
       </div>
     );
   }
 
+  /* ---- pick color per slice ---- */
+  const getFill = (slice: Slice) =>
+    slice.budget === 0
+      ? COLOR_NONE          // no budget set
+      : slice.overspent
+      ? COLOR_OVER          // spent > budget
+      : COLOR_OK;           // within budget
+
+  /* ---- custom tooltip ---- */
+  const CustomTooltip = ({
+    active,
+    payload,
+  }: {
+    active?: boolean;
+    payload?: any[];
+  }) => {
+    if (active && payload && payload.length) {
+      const { name, value, payload: row } = payload[0];
+      const diff = row.budget - value;
+      return (
+        <div className="rounded-lg border bg-white p-2 text-sm shadow">
+          <p className="font-medium">{name}</p>
+          <p>Spent: ₹ {value.toLocaleString()}</p>
+          <p>Budget: ₹ {row.budget?.toLocaleString() || "—"}</p>
+          {row.budget > 0 && (
+            <p className={diff < 0 ? "text-red-600" : "text-green-600"}>
+              {diff < 0
+                ? `Over by ₹${Math.abs(diff).toLocaleString()}`
+                : `Under by ₹${diff.toLocaleString()}`}
+            </p>
+          )}
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
-    <div className="w-full h-[300px] mt-8 bg-white p-4 rounded-lg border shadow-sm">
+    <div className="w-full h-[320px] mt-8 bg-white p-4 rounded-lg border shadow-sm">
       <h2 className="text-lg font-semibold mb-4">
-        Category Breakdown (this month)
+        Category Breakdown vs Budget (this month)
       </h2>
 
       <ResponsiveContainer width="100%" height="100%">
@@ -86,14 +158,14 @@ export function CategoryPieChart() {
             data={data}
             dataKey="value"
             nameKey="name"
-            label
-            outerRadius={100}
+            label={({ name }) => name}
+            outerRadius={110}
           >
-            {data.map((_, idx) => (
-              <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
+            {data.map((slice, idx) => (
+              <Cell key={idx} fill={getFill(slice)} />
             ))}
           </Pie>
-          <Tooltip />
+          <Tooltip content={<CustomTooltip />} />
           <Legend layout="horizontal" verticalAlign="bottom" />
         </PieChart>
       </ResponsiveContainer>

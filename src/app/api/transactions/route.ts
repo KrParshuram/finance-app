@@ -33,10 +33,18 @@ export async function POST(req: Request) {
 export async function GET() {
   try {
     await connectDB();
-    const transactions = await Transaction.find().sort({ date: -1 });
+    const transactions = await Transaction.find().sort({ date: -1 }).lean();
+
+    console.log("🧪 typeof transactions:", typeof transactions);
+    console.log("🧪 Array.isArray(transactions):", Array.isArray(transactions));
+    console.log("🧪 transactions instanceof Array:", transactions instanceof Array);
+    console.log("🧪 transactions:", transactions);
+
+
     return NextResponse.json(transactions, { status: 200 });
   } catch (err) {
     console.error("❌ GET /api/transactions error:", err);
     return NextResponse.json({ error: "Failed to fetch transactions" }, { status: 500 });
   }
 }
+
